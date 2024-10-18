@@ -1,0 +1,655 @@
+---
+title: "MAG 1 Project based on Dustmann et al. (2016, JEP)"
+date: "January 5, 2024"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    keep_md: yes
+    fig_caption: yes
+    df_print: tibble
+    fig_width: 8.5
+    theme: readable
+  html_notebook:
+    fig_width: 10
+    fig_caption: yes
+    toc: yes
+    theme: readable
+  pdf_document:
+    toc: yes
+---
+
+```{=html}
+<style>
+  body {
+    font-size: 110%;  /* Adjust the font size for regular text */
+  }
+
+  pre, code, kbd, samp {
+    font-size: 110%; font-weight: bold; /* Adjust the font size for code chunks */
+  }
+</style>
+```
+## L’impact de l’immigration : pourquoi les études aboutissent-elles à des résultats si différents ?
+
+Projet réalisé par :
+
+-   **ADJANOHOUN Brayann**
+-   **ADOUSSINGANDE Céline**
+-   **COMLAN Cybelle**
+-   **KOUKPONOU Sonagnon**
+
+### **Question 1:** Revue théorique
+
+<br/> ***Question 1.1:*** Brève comparaison des différentes approches discutées par les auteurs pour estimer l'impact des immigrants sur le marché du travail sur les autochtones
+
+On peut distinguer trois approches :
+
+-   **L'approche par cellule nationale de compétences** : Il s'agit d'études qui utilisent la variation des flux d'immigrants à travers les cellules d'expérience en matière d'éducation au niveau national, comme par exemple dans Borjas (2003).
+
+-   **L'approche mixte** : elle prend en compte l'effet relatif de l'immigration d'un groupe de scolarité par rapport à un autre. Il s'agit principalement des études qui exploitent la variation du nombre total d'immigrants et les flux d'immigration entre les régions et entre les groupes de formation, comme par exemple dans Card (2001).
+
+-   **L'approche spatiale pure** : Elle récupère l'effet total de l'immigration qui, contrairement aux deux premières approches, prend en compte les complémentarités entre cellules de compétences et entre capital et travail.
+
+<br/>
+
+**COMPARAISON:**
+
+L'approche par cellule nationale de compétences tend à produire **des effets salariaux plus négatifs** pour les autochtones en réponse à l'immigration que l'approche mixte. Tandis que, les estimations obtenues à partir de l'approche spatiale pure varient considérablement en fonction du groupe de compétences étudiées.
+
+-   ***Question 1.2:*** Explication du déclassement des compétences observé chez les immigrants récents
+
+Le « déclassement » se produit lorsque la position des immigrés sur le marché du travail, qui est généralement mesurée par le salaire ou la profession, est systématiquement inférieure à la position des autochtones ayant les mêmes niveaux d'éducation et d'expérience observés. Le déclassement signifie que les immigrants reçoivent des rendements inférieurs aux mêmes compétences mesurées que les autochtones lorsque ces compétences sont acquises dans leur pays d'origine.
+
+-   ***Question 1.3:*** Effet du déclassement des compétences sur les estimations
+
+Procéder à la répartition des immigrés dans des groupes de compétences en fonction de leurs compétences mesurées peut conduire à des erreurs de classification et nuire sérieusement aux estimations des réponses salariales des autochtones à l'immigration. Par exemple dans le contexte américain, le déclassement peut surestimer l'impact négatif de l'immigration à la fois dans l'approche de cellule nationale de compétences et dans l'approche mixte, mais particulièrement dans l'approche de cellule nationale de compétences.
+
+### **Question 2:** Tâches de réplication à partir du dataframe `census_acs_2000.dta`
+
+**LES LIBRAIRIES UTILES**
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+library(haven)
+library(tidyverse)
+library(stargazer) 
+```
+
+**IMPORTATION DE LA BASE DE DONNEES ET EXTRACTION**
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+path<-"C:/Users/ASUS/Desktop/"
+read_dta(paste0(path, "census_acs_2000.dta")) %>%
+  select(year, age, labforce, wkswork2, incwage, classwkr, educd, race,
+         marst, empstat, bpld, yrimmig, sex, serial, occ) ->
+  acs2000 
+```
+
+Visualisation
+
+```{r}
+head(acs2000) 
+```
+
+**ANALYSE EXPLORATOIRE: PRELIMINAIRES**
+
+-   Délimitation de l'échantillon de travailleurs i.e la population active celle agée entre 18 à 65 ans
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+acs2000 %>%
+  filter(age >=18 & age <=65 & labforce == 2,classwkr == 2) -> acs2000
+```
+
+-   Création et recodage de variables :
+
+***weeks*** : Cette variable est calculée en multipliant différents multiplicateurs par les catégories de la variable `wkswork2`.
+
+***lnw*** : Cette variable est calculée avec le logarithme naturel de la variable `incwage` diviser par la variable `weeks`.
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+acs2000 %>%
+  mutate(weeks = 7 * (wkswork2 == 1) + 20 * (wkswork2 == 2) +
+           33 * (wkswork2 == 3) +
+           43.5 * (wkswork2 == 4) + 48.5 * (wkswork2 == 5) +
+           51 * (wkswork2 == 6)) %>%
+  mutate(lnw = log(incwage / weeks)) %>%
+  filter(!is.na(lnw), lnw != -Inf, lnw != Inf) ->
+  acs2000 
+```
+
+***foreign*** : la nouvelle variable prendra la valeur "TRUE" si la valeur de `bpld` est supérieure ou égale à 15000.
+
+***immclass*** : Ajoute une nouvelle variable initialisée à `NA` puis modifie la valeur de la colonne `immclass` en 1 si la valeur de la colonne `foreign` est égale à 1 et si la différence entre les valeurs des colonnes `year` et `yrimmig` est inférieure ou égale à 2.
+
+Modifie la valeur de la colonne `immclass` en 2 si la valeur de la colonne `foreign` est égale à 1 et si la différence entre les valeurs des colonnes `year` et `yrimmig` est supérieure à 2 et inférieure ou égale à 5, etc.
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+acs2000 %>%
+  mutate(foreign = (bpld>=15000),
+         immclass = case_when(foreign==1 & year-yrimmig<=2 ~ 1,
+                              foreign==1 & year-yrimmig> 2 & year-yrimmig<=5 ~ 2,
+                              foreign==1 & year-yrimmig> 5 & year-yrimmig<=10 ~ 3,
+                              foreign==1 & year-yrimmig> 10 & !is.na(year-yrimmig) ~ 4
+         ),
+  agecat= case_when(age >= 18 & age <= 25 ~ 1, 
+                             age > 25 & age <= 35 ~ 2,
+                             age > 35 & age <= 45 ~ 3,
+                             age > 45 & age <= 55 ~ 4, 
+                             age > 55 & age <= 65 ~ 5,
+                             TRUE ~ NA_real_
+          ))-> acs2000                 
+```
+
+***Schooling*** : La première mutation initialise la variable `schooling` à 0 par défaut. Ensuite les codes qui suivent mettent à jour la colonne `schooling` dans le tableau de données *acs2000* en remplaçant les zéros en fonction des valeurs de la colonne `educd` dans chaque ligne.
+
+***pe*** : L'expérience professionnelle qui est donnée par la différence entre `age` et la somme de 6 et `schooling`.
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+acs2000 %>%    
+  mutate(schooling = 0) %>%
+  mutate(schooling = ifelse(educd == 10, 2, schooling)) %>%
+  mutate(schooling = ifelse(educd == 13, 2.5, schooling)) %>%
+  mutate(schooling = ifelse(educd == 14, 1, schooling)) %>%
+  mutate(schooling = ifelse(educd == 15, 2, schooling)) %>%
+  mutate(schooling = ifelse(educd == 16, 3, schooling)) %>%
+  mutate(schooling = ifelse(educd == 17, 4, schooling)) %>%
+  mutate(schooling = ifelse(educd == 20, 6.5,schooling)) %>%    
+  mutate(schooling = ifelse(educd == 21, 5.5, schooling)) %>%
+  mutate(schooling = ifelse(educd == 22, 5, schooling)) %>%
+  mutate(schooling = ifelse(educd == 23, 6, schooling)) %>%
+  mutate(schooling = ifelse(educd == 25, 7, schooling)) %>%
+  mutate(schooling = ifelse(educd == 24, 7.5, schooling)) %>%    
+  mutate(schooling = ifelse(educd == 26, 8, schooling)) %>%
+  mutate(schooling = ifelse(educd == 30, 9, schooling)) %>%
+  mutate(schooling = ifelse(educd == 40, 10, schooling)) %>%    
+  mutate(schooling = ifelse(educd == 50 | educd == 61, 11, schooling)) %>%
+  mutate(schooling = ifelse(educd == 60 | (educd >= 62 & educd <= 64), 12, schooling)) %>%
+  mutate(schooling = ifelse(educd >= 65 & educd <= 71, 13, schooling)) %>%
+  mutate(schooling = ifelse(educd >= 80 & educd <= 90, 14, schooling)) %>%
+  mutate(schooling = ifelse(educd == 90, 15, schooling)) %>%
+  mutate(schooling = ifelse(educd == 100 | educd == 101, 16, schooling)) %>%
+  mutate(schooling = ifelse(educd == 110, 17, schooling)) %>%
+  mutate(schooling = ifelse(educd == 111 | educd == 114, 18, schooling)) %>%
+  mutate(schooling = ifelse(educd == 112, 19, schooling)) %>%
+  mutate(schooling = ifelse(educd == 113 | educd > 114, 20, schooling)) %>%
+  mutate(pe = as.integer(age - 6 - schooling))  ->
+  acs2000
+```
+
+L'instruction ci-dessous filtre le dataframe en gardant uniquement les lignes où `lnw` n'est pas NA et où `pe` est supérieur ou égal à 1 et inférieur ou égal à 40. En d'autres termes, les lignes avec des valeurs manquantes de `lnw` sont exclues et seules les lignes avec des valeurs de `pe` comprises entre 1 et 40 sont gardées
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hold'}
+acs2000 %>%
+  filter(!is.na(lnw), pe >= 1 & pe <= 40) ->
+  acs2000
+
+```
+
+-   Affichage des colonnes en horizontale avec leurs types respectifs
+
+```{r}
+glimpse(acs2000) 
+```
+
+<br/> ***Question 2.1:*** Explorons la présence d'un déclassement des compétences, en estimant les regressions salariales incluant le niveau de scolarité comme variable catégorielle et l'interaction entre le niveau de scolarité et l'âge.
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE, results='hold'}
+modf <-lnw ~ educd+age+I(age^2)+ sex+educd:age + foreign
+
+reg1 <- lm(modf, data=acs2000, subset=(foreign==0 |immclass==1))
+reg2 <- lm(modf, data=acs2000, subset=(foreign==0 |immclass==2))
+reg3 <- lm(modf, data=acs2000, subset=(foreign==0 |immclass==3))
+reg4 <- lm(modf, data=acs2000, subset=(foreign==0 |immclass==4))
+
+stargazer(reg1,reg2,reg3,reg4,
+          dep.var.caption="0-2 years 3-5 years 6-10 years more than 10 years",dep.var.labels="",
+          omit.table.layout = "n", star.cutoffs = NA,
+          keep.stat=c("n", "rsq"),no.space=TRUE,
+          keep=c("foreignTRUE"),
+          header=TRUE,
+          title="Table replication", type="text"
+)
+```
+
+
+**COMMENTAIRE ET INTERPRETATION DU TABLEAU DE REGRESSION**
+
+La ligne `foreign` donne les coefficients estimés pour la variable foreign dans chaque catégorie d'immigrants. Les valeurs indiquent comment le log du salaire (lnw) change en réponse à un changement d'une unité dans la variable foreign.Ainsi:
+
+
++ Model 1
+
+Interprétation : l'augmentation d'une unité dans la variable foreign est associée à une diminution de 0.120 dans le log du salaire (lnw) pour les individus de la catégorie "0-2 years" par rapport aux natifs (non-immigrants) ou étrangers sans spécification de durée.
+
++ Model 2
+
+Interprétation : L'augmentation d'une unité dans la variable foreign entraine une  diminution de 0.115 dans le log du salaire (lnw) pour les individus de la catégorie "3-5 years" par rapport aux natifs (non-immigrants) ou étrangers sans spécification de durée.
+
++ Model 3
+
+L'augmentation d'une unité dans la variable foreign entraine une  diminution de 0.115 dans le log du salaire (lnw) pour les individus de la catégorie "3-5 years" par rapport aux natifs (non-immigrants) ou étrangers sans spécification de durée.
+
+
++ Model 4
+
+Une unité d'augmentation dans la variable foreign est associée à une augmentation de 0.004 dans le log du salaire (lnw) pour les individus de la catégorie "more than 10 years" par rapport aux natifs (non-immigrants) ou étrangers sans spécification de durée.
+
+
+*Remarques :* 
+
+Les coefficients négatifs indiquent une relation négative entre la variable foreign et le log du salaire. Cela suggère que, en moyenne, les personnes étrangères ont tendance à avoir des salaires inférieurs par rapport aux natifs ou aux étrangers sans spécification de durée.
+
+La magnitude des coefficients donne une idée de l'ampleur de l'effet de la variable foreign sur le log du salaire dans chaque catégorie.
+
+Il est important de noter que ces interprétations sont basées sur l'hypothèse que les autres variables du modèle restent constantes.
+
+
+**PREDICTION DU LOGARITHME DES SALAIRES**
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+acs2000$lnw_pred <- NA
+acs2000$sigma <- NA
+
+acs2000$in_reg <- (acs2000$sex == 1 & acs2000$foreign == 0)
+mod <- lm(lnw ~ foreign + age + educd + educd*age,
+          data=acs2000, subset=in_reg)
+acs2000$sigma[acs2000$in_reg] <- (mod$residuals)^2
+acs2000$lnw_pred[acs2000$sex == 1] <- predict(mod, acs2000[acs2000$sex == 1,])
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+acs2000 %>% arrange(serial) -> acs2000
+set.seed(1234)
+
+for (i in min(acs2000$agecat):max(acs2000$agecat)) {
+  for (k in 1:2) {
+    for (j in min(acs2000$educd):max(acs2000$educd) ) {
+      acs2000$in_reg <- (acs2000$agecat==i & acs2000$sex==k & acs2000$educd==j)
+      N = sum(acs2000$in_reg)
+      if (N>0) {
+        sdS = sqrt(mean(acs2000$sigma[acs2000$in_reg], na.rm=TRUE))
+        # cat(i, k, j, "N=",N, "  ", sdS, "\n")
+        acs2000$lnw_pred[acs2000$in_reg] = acs2000$lnw_pred[acs2000$in_reg] +
+          rnorm(N,0,sdS)
+      }
+    }
+  }
+}
+
+acs2000 %>%
+  filter(!is.na(lnw_pred)) %>%
+  mutate(lnw_pred = ifelse(foreign==0, lnw,lnw_pred)) ->
+  acs2000
+```
+
+<br/> ***Question 2.2:*** Computation of the percentile ranks in actual and predicted wage distribution
+
+-   Calcule des rangs centiles pour les salaires réels
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+
+acs2000 <- acs2000 %>% 
+  mutate(x = (foreign==0)) %>% 
+  arrange(lnw) %>% # sorting
+  mutate(rank = cumsum(x) ) %>% # somme cumulée de l'indicateur qui prouve qu'on n'est pas immigrée
+  mutate(rank = rank / max(rank)) %>% # normalisation to [0,1] 
+  mutate(immpos = ifelse(log(rank/(1-rank)) < Inf, log(rank/(1-rank)), NA)) # première transformation des rangs par la transformation logarithmique
+  
+# estimation de la densité
+dens_imm =density(acs2000$immpos[acs2000$foreign == 1])
+ 
+# Retransformation  
+dens_imm$x2 <- exp(dens_imm$x) / (1 + exp(dens_imm$x))
+```
+
+-   Calcule des rangs centiles pour les salaires prédits
+
+Il s'agit de Calculer la variable `Foreign predicted` et d'appliquer la meme pocédure comme pour pour `lnw_pred`. Voici la procédure que nous proposons :
+
+```{r,eval=FALSE, results='hide'}
+modele <- glm(foreign ~ bpld + immclass, data = acs2000, family = "binomial")# Construction du modèle de régression logistique
+
+acs2000 <- acs2000 %>%
+  mutate(foreign_pred = predict(modele, newdata = ., type = "response")) %>%
+  mutate(foreign_pred = ifelse(is.na(foreign_pred), 0, foreign_pred)) %>%
+  mutate(foreign_pred = as.logical(foreign_pred))
+
+acs2000 <- acs2000 %>%
+  mutate(y = (foreign_pred == 0)) %>%
+  arrange(lnw_pred) %>% # sorting
+  mutate(rank_pred = cumsum(y)) %>%
+  mutate(rank_pred = rank_pred / max(rank_pred)) %>%
+  mutate(immpos_pred = ifelse(log(rank_pred/(1-rank_pred)) < Inf, log(rank_pred/(1-rank_pred)), NA))
+
+# Estimation de la densité : 
+dens_imm_pred= density(acs2000$immpos_pred[acs2000$foreign_pred == 1])
+
+#transformation  
+dens_imm_pred$y2 <- exp(dens_imm_pred$y) / (1 + exp(dens_imm_pred$y))
+```
+
+<br/> **Cependant en optant pour la procédure ci-dessus, nous avons rencontré des difficultés dans le calcul de la variable `Foreign predicted`.**
+
+**Voici le code similaire que nous avons finalement utilisé pour calculer les rangs centiles prédits:**
+
+```{r, message=FALSE, warning=FALSE}
+#une autre méthode que voici : 
+
+ecdf_lnwpr <- ecdf(acs2000$lnw)# Création de la fonction de distribution cumulative empirique (ECDF) 
+centiles_predi <- ecdf_lnwpr(seq(min(acs2000$lnw_pred), max(acs2000$lnw_pred), length.out = 101))
+centiles_predi = centiles_predi[1:100]
+rang_p <- log(centiles_predi /(1-centiles_predi))
+
+# Estimation de la densité de la distribution des rangs transformés :
+dens_imm1 <- density(rang_p)
+# Puis la rétransformation  
+inv_transform <- function(x) {return (exp(x) / (1 +exp(x)))}
+
+x1= inv_transform(dens_imm1$x)
+dens1=density(x1)
+```
+
+-   Le graphique 1.A :
+
+```{r}
+# Tracer la première graphique
+plot(dens_imm$x2,
+     dens_imm$y /(dens_imm$x2 * (1-dens_imm$x2)), type = "l", lty = 2,ylab="", xlab="rank", col = "green", xlim = c(0.05, 0.95))
+
+title("Position of Foreign Workers in Native Wage Distribution")
+
+# Tracer la deuxième graphique # A corriger
+lines(dens1, type="l",
+      ylab="", xlab="rank", col = "black")
+# Tracer la troisième graphique
+abline(h = 1, col = "grey")
+axis(1, at = c(0.2, 0.4, 0.6, 0.8))
+# Ajouter la légende
+legend("topright", legend = c("Foreign predicted", "Foreign", "Natives"),
+       col = c("black", "green", "grey"), lty = c(1, 2, 1))
+
+```
+
+
+**Pour avoir laxe des ordonnées comme exactement dans larticle nous avons fait recours au code suivant après le premier graphique.  Toutefois, cela n'a pas marché et doit faire objet de correction** 
+
+```{r,eval=FALSE, results='hide'}
+y_vals <- c(0.8, 1.0, 1.2, 1.4, 1.6)
+axis(2, at = y_vals, labels = y_vals)
+```
+
+**COMMENTAIRE ET INTERPRETATION DE LA FIGURE 1.A** : 
+
+La figure 1A, permet d'observer où se situent réellement les immigrants récents (que nous définissons comme les immigrants arrivés au cours des deux dernières années) dans la répartition des salaires autochtones (les lignes pointillées vertes ), et où nous les assignerions s’ils recevaient le même retour sur leur expérience et leur éducation que les autochtones (les lignes pleines noires). 
+Les chiffres nous font observer qu'aux USA, les immigrés sont, par rapport aux autochtones ayant les mêmes mesures formelles d’expérience et d’éducation, surreprésentés au bas de l’échelle des salaires et sous-représentés aux extrémités moyennes ou supérieures de l’échelle des salaires. En effet, la ligne pointillée (indiquant où se trouvent réellement les immigrants) se situe au-dessus de la ligne continue (indiquant où les immigrants devraient se trouver en fonction de leur éducation et de leur expérience) aux percentiles inférieurs de la répartition des salaires, mais elle a tendance à être sous la ligne continue, plus haut dans la répartition des salaires. 
+
+- Le Graphique 1.D
+
+
+
+```{r, eval=FALSE}
+# Tracer le graphique pour les immigrants travailleurs
+
+
+# Arrival 3-10 years(immclass == 2 | immclass == 3)
+
+acs2000 <- acs2000 %>% 
+  mutate(x = (immclass == 2 | immclass == 3)) %>% 
+  mutate(RAnk = cumsum(x) ) %>% # somme cumulée de l'indicateur qui prouve qu'on n'est pas immigrée
+  mutate(RAnk = RAnk / max(RAnk)) %>% # normalisation to [0,1] 
+  mutate(IMmpos = ifelse(log(RAnk/(1-RAnk)) < Inf, log(RAnk/(1-RAnk)), NA)) # première transformation des rangs par la transformation logarithmique
+
+# Densité
+DEns_imm =density(acs2000$immpos[acs2000$x])
+
+#Retransformation  
+
+DEns_imm$x2 <- exp(dens_imm$x) / (1 + exp(dens_imm$x))
+
+#Tracé des courbes
+# Tracer la première courbe
+plot(DEns_imm$x2,
+     DEns_imm$y /(DEns_imm$x2 * (1-DEns_imm$x2)), type = "l", lty = 2, #lwd=1,
+     ylab="", xlab="rank", col = "orange", xlim = c(0.02, 0.95))
+
+# Ajouter la deuxième courbe
+lines(dens_imm$x2,
+      dens_imm$y /(dens_imm$x2 * (1-dens_imm$x2)), type = "l", lty = 2, #lwd=1,
+      col = "green")
+
+# Tracer la troisième graphique
+abline(h = 1, col = "grey")
+
+axis(1, at = c(0.2, 0.4, 0.6, 0.8))
+
+# Ajouter la légende
+legend("topright", legend = c("Arrival <= 2 years", "Arrival 3-10 years", "Natives"),
+       +        col = c("green", "orange","grey"), lty = c(1, 2,1))
+```
+
+
+
+### **Question 3 :** Extraction des variables pertinentes d’ipums USA, et comparaison de l'extrait de données aux principaux résultats de régression.census_acs_2000.dta
+
+Dans cette partie nous nous sommes rendus sur le site <https://usa.ipums.org> pour sélectionner les variables pertinentes et constituer l'échantillon de données comme l'illustre les images ci dessous :
+
+![](images/image%201.png)
+
+![](images/image%202.png)
+
+```{r}
+library(haven)
+library(tidyverse)
+library(stargazer)
+library(dplyr)
+library(ggplot2)
+library('ipumsr')
+
+```
+
+**REPLICATION DE ENSEMBLE DES CODES PRECEDENTS ADAPTES A LA BASE IPUMS EXTRAITES**
+
+```{r, message=FALSE, warning=FALSE}
+# Spécification du chemin d'accès au fichier .xml
+path_xml <-"C:/Users/ASUS/Desktop/usa_00003.dat/usa_00003.xml" 
+
+# Lecture du fichier .xml
+ddi <- read_ipums_ddi(path_xml)
+
+# Spécification du chemin d'accès au fichier .dat
+path_dat <- "C:/Users/ASUS/Desktop/usa_00003.dat/usa_00003.dat"
+
+# Lecture des données
+usa_00003 <- read_ipums_micro(ddi, data_file = path_dat)
+usa_00003%>%
+  select(YEAR, AGE, LABFORCE, WKSWORK2 , INCWAGE , CLASSWKR , EDUCD , RACE ,
+         MARST , EMPSTAT , BPLD , YRIMMIG , SEX , SERIAL , OCC ) ->
+  usa_00003
+```
+
+**ANALYSE EXPLORATOIRE avec usa_00003 : PRELIMINAIRES**
+
+```{r}
+
+#Délimitation de l'échantillon
+usa_00003 %>%
+  filter(AGE >=18 & AGE <=65 & LABFORCE == 2,CLASSWKR == 2) ->
+  usa_00003
+
+# Création et recodage  des variables : 
+# WEEKS, LNW
+usa_00003 %>%
+  mutate(WEEKS  = 7 * (WKSWORK2 == 1) + 20 * (WKSWORK2 == 2) +
+           33 * (WKSWORK2 == 3) +
+           43.5 * (WKSWORK2 == 4) + 48.5 * (WKSWORK2 == 5) +
+           51 * (WKSWORK2 == 6)) %>%
+  mutate( LNW = log(INCWAGE / WEEKS)) %>%
+  filter(!is.na(LNW), LNW != -Inf, LNW != Inf) ->
+  usa_00003 
+
+#FOREIGN ,IMMCLASS
+usa_00003 %>%
+  mutate(FOREIGN  = (BPLD >=15000),
+         IMMCLASS = case_when(FOREIGN==1 & YEAR-YRIMMIG<=2 ~ 1,
+                              FOREIGN==1 & YEAR-YRIMMIG> 2 & YEAR-YRIMMIG<=5 ~ 2,
+                              FOREIGN==1 & YEAR-YRIMMIG> 5 & YEAR-YRIMMIG<=10 ~ 3,
+                              FOREIGN==1 & YEAR-YRIMMIG> 10 & !is.na(YEAR-YRIMMIG) ~ 4
+         ),
+         AGECAT  = case_when(AGE  >= 18 & AGE <= 25 ~ 1, 
+                             AGE > 25 & AGE <= 35 ~ 2,
+                             AGE > 35 & AGE <= 45 ~ 3,
+                             AGE > 45 ~ 4, 
+                             TRUE ~ NA_real_
+         ))-> usa_00003                 
+
+usa_00003 %>%    
+  mutate(SCHOOLING  = 0) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 10, 2, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 13, 2.5, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 14, 1, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 15, 2, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 16, 3, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 17, 4, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 20, 6.5,SCHOOLING)) %>%    
+  mutate(SCHOOLING = ifelse(EDUCD == 21, 5.5, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 22, 5, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 23, 6, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 25, 7, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 24, 7.5, SCHOOLING)) %>%    
+  mutate(SCHOOLING = ifelse(EDUCD == 26, 8, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 30, 9, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 40, 10, SCHOOLING)) %>%    
+  mutate(SCHOOLING = ifelse(EDUCD == 50 | EDUCD == 61, 11, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 60 | (EDUCD >= 62 & EDUCD <= 64), 12, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD >= 65 & EDUCD <= 71, 13, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD >= 80 & EDUCD <= 90, 14, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 90, 15, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 100 | EDUCD == 101, 16, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 110, 17, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 111 | EDUCD == 114, 18, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 112, 19, SCHOOLING)) %>%
+  mutate(SCHOOLING = ifelse(EDUCD == 113 | EDUCD > 114, 20, SCHOOLING)) %>%
+  mutate(PE = as.integer(AGE - 6 - SCHOOLING))  ->
+  usa_00003
+
+usa_00003 %>%
+  filter(!is.na(LNW), PE >= 1 & PE <= 40) ->
+  usa_00003
+
+#affichage de la base
+glimpse(usa_00003) 
+```
+
+**TACHE DE REPLICATION 2**
+
+```{r}
+
+MODF <-LNW ~ EDUCD +AGE+I(AGE^2)+ SEX+EDUCD:AGE + FOREIGN 
+
+REG2 <- lm(MODF, data=usa_00003, subset=(FOREIGN==0 |IMMCLASS==1))
+REG3 <- lm(MODF, data=usa_00003, subset=(FOREIGN==0 |IMMCLASS==2))
+REG4 <- lm(MODF, data=usa_00003, subset=(FOREIGN==0 |IMMCLASS==3))
+REG5 <- lm(MODF, data=usa_00003, subset=(FOREIGN==0 |IMMCLASS==4))
+
+stargazer(REG2,REG3,REG4,REG5,
+          dep.var.caption="0-2 years 3-5 years 6-10 years more than 10 years",dep.var.labels="",
+          omit.table.layout = "n", star.cutoffs = NA,
+          keep.stat=c("n", "rsq"),no.space=TRUE,
+          keep=c("FOREIGNTRUE"),
+          header=TRUE,
+          title="Table replication",type="text"
+)
+
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+
+usa_00003$LNW_PRED <- NA
+usa_00003$SIGMA <- NA
+
+usa_00003$IN_REG <- (usa_00003$SEX == 1 & usa_00003$FOREIGN == 0)
+MOD <- lm(LNW ~ FOREIGN + AGE + EDUCD + EDUCD*AGE,
+          data=usa_00003, subset=IN_REG)
+usa_00003$SIGMA[usa_00003$IN_REG] <- (MOD$residuals)^2
+usa_00003$LNW_PRED[usa_00003$SEX == 1] <- predict(MOD, usa_00003[usa_00003$SEX == 1,])
+
+usa_00003 %>% arrange(SERIAL) -> usa_00003
+set.seed(1234)
+
+for (i in min(usa_00003$AGECAT):max(usa_00003$AGECAT)) {
+  for (k in 1:2) {
+    for (j in min(usa_00003$EDUCD):max(usa_00003$EDUCD) ) {
+      usa_00003$IN_REG <- (usa_00003$AGECAT==i & usa_00003$SEX==k & usa_00003$EDUCD==j)
+      N = sum(usa_00003$IN_REG)
+      if (N>0) {
+        sdS = sqrt(mean(usa_00003$SIGMA[usa_00003$IN_REG], na.rm=TRUE))
+        # cat(i, k, j, "N=",N, "  ", sdS, "\n")
+        usa_00003$LNW_PRED[usa_00003$IN_REG] = usa_00003$LNW_PRED[usa_00003$IN_REG] +
+          rnorm(N,0,sdS)
+      }
+    }
+  }
+}
+
+usa_00003 %>%
+  filter(!is.na(LNW_PRED)) %>%
+  mutate(LNW_PRED = ifelse(FOREIGN==0, LNW,LNW_PRED)) ->
+  usa_00003
+
+```
+
+Question 2 avec `usa_00003`
+
+```{r}
+
+#Calcul des rang centiles
+usa_00003 <- usa_00003 %>% 
+  mutate(x = (FOREIGN==0)) %>% 
+  arrange(LNW) %>% # sorting
+  mutate(RANK = cumsum(x) ) %>% 
+  mutate(RANK = RANK / max(RANK)) %>% # normalisation to [0,1] 
+  mutate(IMMPOS = ifelse(log(RANK/(1-RANK)) < Inf, log(RANK/(1-RANK)), NA)) 
+
+#estimation de la densité
+DENS_IMM =density(usa_00003$IMMPOS[usa_00003$FOREIGN == 1])
+
+#Retransformation  
+DENS_IMM$x2 <- exp(DENS_IMM$x) / (1 + exp(DENS_IMM$x))
+
+# calcul des rangs centiles prédits:
+
+ecdf_LNWPR <- ecdf(usa_00003$LNW)
+CENTILES_PREDI <- ecdf_LNWPR(seq(min(usa_00003$LNW_PRED), max(usa_00003$LNW_PRED), length.out = 101))
+CENTILES_PREDI = CENTILES_PREDI[1:100]
+RANG_P <- log(CENTILES_PREDI /(1-CENTILES_PREDI))
+
+# Estimation de la densité de la distribution des rangs transformés :
+
+DENS_IMM1 <- density(RANG_P)
+
+#Puis la rétransformation  
+
+INV_TRANSFORM <- function(x) {return (exp(x) / (1 +exp(x)))}
+
+x3= INV_TRANSFORM(DENS_IMM1$x)
+DENS1=density(x3)
+
+# Le graphique  1.A avec les données ipums
+
+plot(DENS_IMM$x2,
+     DENS_IMM$y /(DENS_IMM$x2 * (1-DENS_IMM$x2)), type = "l", lty = 2, #lwd=1,
+     ylab="", xlab="rank", col = "green", xlim = c(0.05, 0.95)) 
+
+title("Position of Foreign Workers in Native Wage Distribution")
+
+lines(DENS1, type="l",
+      ylab="", xlab="rank", col = "black")
+
+abline(h = 1, col = "grey")
+
+axis(1, at = c(0.2, 0.4, 0.6, 0.8))
+legend("topright", legend = c("Foreign predicted", "Foreign", "Natives"),
+       col = c("black", "green", "grey"), lty = c(1, 2, 1))
+
+```
+**COMPARAISON DES RESULTATS PERTINENTS ENTRE `usa_00003` et `acs2000`** : En téléchargeant directement les données sur le site impums on remarque que les résultats pertinents que sont notamment les regressions salariales et la Figure 1.A sont identiques pour les deux bases de données. 
